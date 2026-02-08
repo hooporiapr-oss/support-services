@@ -1,0 +1,670 @@
+import { useState, useEffect, useCallback } from "react";
+
+/* ─── Audio Engine (Conga-inspired tones) ─── */
+const playTone = (type) => {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    if (type === "complete") {
+      // Warm conga "tok" — task done
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(280, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(120, ctx.currentTime + 0.15);
+      gain.gain.setValueAtTime(0.4, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.2);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.2);
+    } else if (type === "undo") {
+      // Soft reverse tap
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(200, ctx.currentTime);
+      gain.gain.setValueAtTime(0.2, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.12);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.12);
+    } else if (type === "add") {
+      // Bright conga slap — new reminder
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(400, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(180, ctx.currentTime + 0.12);
+      gain.gain.setValueAtTime(0.35, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.18);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.18);
+    } else if (type === "checkin") {
+      // Gentle warm chord
+      const osc2 = ctx.createOscillator();
+      const gain2 = ctx.createGain();
+      osc2.connect(gain2);
+      gain2.connect(ctx.destination);
+      osc.type = "sine";
+      osc2.type = "sine";
+      osc.frequency.setValueAtTime(260, ctx.currentTime);
+      osc2.frequency.setValueAtTime(330, ctx.currentTime);
+      gain.gain.setValueAtTime(0.25, ctx.currentTime);
+      gain2.gain.setValueAtTime(0.2, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+      gain2.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+      osc.start(ctx.currentTime);
+      osc2.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.5);
+      osc2.stop(ctx.currentTime + 0.5);
+    } else if (type === "mood") {
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(320, ctx.currentTime);
+      gain.gain.setValueAtTime(0.15, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.15);
+    }
+  } catch (e) { /* silent fallback */ }
+};
+
+/* ─── Data ─── */
+const CATS = [
+  { id: "salud", label: "Salud", icon: "💊", color: "#D45D3F" },
+  { id: "comida", label: "Comida", icon: "🍽️", color: "#5A9E7A" },
+  { id: "movimiento", label: "Movimiento", icon: "🚶", color: "#C49530" },
+  { id: "social", label: "Social", icon: "💬", color: "#3D405B" },
+  { id: "descanso", label: "Descanso", icon: "😴", color: "#7B6DAF" },
+  { id: "personal", label: "Personal", icon: "✨", color: "#C47E55" },
+];
+
+const MENSAJES = [
+  "Lo estás haciendo bien. Un paso a la vez. 🌿",
+  "Tu bienestar importa. Gracias por estar presente. ☀️",
+  "Está bien ir despacio. Vas a tu tiempo.",
+  "Cuidarte es un acto de amor propio. 💛",
+  "Hoy es un buen día para ser bueno contigo. 🌺",
+  "Cada pequeña acción suma algo hermoso.",
+  "Respira profundo. Tú puedes con esto. 🌊",
+  "No tienes que ser perfecto. Solo tienes que ser tú. 🤙",
+];
+
+const HORAS = [
+  "6:00 AM", "6:30 AM", "7:00 AM", "7:30 AM", "8:00 AM", "8:30 AM",
+  "9:00 AM", "9:30 AM", "10:00 AM", "10:30 AM", "11:00 AM", "11:30 AM",
+  "12:00 PM", "12:30 PM", "1:00 PM", "1:30 PM", "2:00 PM", "2:30 PM",
+  "3:00 PM", "3:30 PM", "4:00 PM", "4:30 PM", "5:00 PM", "5:30 PM",
+  "6:00 PM", "6:30 PM", "7:00 PM", "7:30 PM", "8:00 PM", "8:30 PM",
+  "9:00 PM", "9:30 PM", "10:00 PM",
+];
+
+const MOODS = [
+  { emoji: "😊", label: "Genial", val: "genial" },
+  { emoji: "🙂", label: "Bien", val: "bien" },
+  { emoji: "😐", label: "Ahí", val: "ahi" },
+  { emoji: "😔", label: "Bajito", val: "bajito" },
+  { emoji: "😰", label: "Difícil", val: "dificil" },
+];
+
+const MOOD_RESP = {
+  genial: "¡Qué bueno! Vamos con esa energía. 🌟",
+  bien: "Me alegra escuchar eso. Vas muy bien. 💚",
+  ahi: "Está bien. Cada día es diferente. 🌤️",
+  bajito: "Estoy aquí contigo. Sé amable contigo hoy. 💛",
+  dificil: "Siento que esté difícil. No estás solo/a. 🤗",
+};
+
+const formatFecha = (d) => {
+  const dias = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
+  const meses = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+  return `${dias[d.getDay()]}, ${d.getDate()} de ${meses[d.getMonth()]}`;
+};
+
+const getSaludo = () => {
+  const h = new Date().getHours();
+  if (h < 12) return "Buenos días";
+  if (h < 17) return "Buenas tardes";
+  return "Buenas noches";
+};
+
+/* ─── Component ─── */
+export default function RecuerdoAmable() {
+  const [recs, setRecs] = useState([
+    { id: 1, text: "Tomar medicamento de la mañana", time: "8:00 AM", cat: "salud", done: false },
+    { id: 2, text: "Tomar un vaso de agua", time: "9:00 AM", cat: "salud", done: false },
+    { id: 3, text: "Almorzar algo nutritivo", time: "12:00 PM", cat: "comida", done: false },
+    { id: 4, text: "Caminar 15 minutos", time: "2:00 PM", cat: "movimiento", done: false },
+    { id: 5, text: "Llamar a un familiar o amigo", time: "4:00 PM", cat: "social", done: false },
+    { id: 6, text: "Relajarse — sin pantallas", time: "9:00 PM", cat: "descanso", done: false },
+  ]);
+
+  const [showForm, setShowForm] = useState(false);
+  const [nuevo, setNuevo] = useState({ text: "", time: "9:00 AM", cat: "personal" });
+  const [animo, setAnimo] = useState(null);
+  const [mensaje, setMensaje] = useState("");
+  const [nota, setNota] = useState("");
+  const [showCI, setShowCI] = useState(false);
+  const [ciListo, setCIListo] = useState(false);
+  const [tab, setTab] = useState("hoy");
+  const [confirmDel, setConfirmDel] = useState(null);
+  const [sound, setSound] = useState(true);
+
+  useEffect(() => {
+    setMensaje(MENSAJES[Math.floor(Math.random() * MENSAJES.length)]);
+  }, []);
+
+  const done = recs.filter((r) => r.done).length;
+  const total = recs.length;
+  const pct = total > 0 ? (done / total) * 100 : 0;
+
+  const toggle = (id) => {
+    setRecs((p) => p.map((r) => {
+      if (r.id === id) {
+        if (sound) playTone(r.done ? "undo" : "complete");
+        return { ...r, done: !r.done };
+      }
+      return r;
+    }));
+  };
+
+  const borrar = (id) => {
+    setRecs((p) => p.filter((r) => r.id !== id));
+    setConfirmDel(null);
+  };
+
+  const agregar = () => {
+    if (!nuevo.text.trim()) return;
+    if (sound) playTone("add");
+    setRecs((p) => [...p, { id: Date.now(), text: nuevo.text, time: nuevo.time, cat: nuevo.cat, done: false }]);
+    setNuevo({ text: "", time: "9:00 AM", cat: "personal" });
+    setShowForm(false);
+  };
+
+  const enviarCI = () => {
+    if (sound) playTone("checkin");
+    setCIListo(true);
+    setTimeout(() => setShowCI(false), 3000);
+  };
+
+  const cc = (id) => CATS.find((c) => c.id === id)?.color || "#999";
+  const pendientes = recs.filter((r) => !r.done);
+  const completados = recs.filter((r) => r.done);
+
+  return (
+    <div style={{ minHeight: "100vh", background: "linear-gradient(160deg, #FFFBF5 0%, #F5EDE3 40%, #EDE5D8 100%)", margin: 0, padding: 0 }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Merriweather:wght@400;700&family=Nunito:wght@400;500;600;700;800&display=swap');
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+          --body: 'Nunito', sans-serif;
+          --head: 'Merriweather', serif;
+          --text: #2C2F3E;
+          --muted: #6B6D7B;
+          --light: #9B9DAB;
+          --card: #FDFCFA;
+          --green: #5A9E7A;
+          --red: #D45D3F;
+          --purple: #7B6DAF;
+          --shadow: 0 2px 16px rgba(44,47,62,0.07);
+          --radius: 20px;
+        }
+
+        .wrap { max-width: 520px; margin: 0 auto; padding: 20px 16px 120px; }
+
+        /* Accessibility: minimum 44px tap targets everywhere */
+        button, [role="button"] { min-height: 48px; min-width: 48px; }
+
+        .fi { opacity: 0; transform: translateY(12px); animation: fu 0.5s ease forwards; }
+        .d1 { animation-delay: 0.08s; } .d2 { animation-delay: 0.16s; }
+        .d3 { animation-delay: 0.24s; } .d4 { animation-delay: 0.32s; }
+        @keyframes fu { to { opacity: 1; transform: translateY(0); } }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+        @keyframes pop { 0% { transform: scale(0.9); } 50% { transform: scale(1.05); } 100% { transform: scale(1); } }
+        @keyframes check-pop { 0% { transform: scale(1); } 50% { transform: scale(1.25); } 100% { transform: scale(1); } }
+
+        /* ── Saludo ── */
+        .saludo {
+          background: linear-gradient(135deg, var(--card) 0%, #F7F0E6 100%);
+          border-radius: var(--radius); padding: 28px 24px; margin-bottom: 16px;
+          box-shadow: var(--shadow); position: relative; overflow: hidden;
+        }
+        .saludo::after {
+          content: ''; position: absolute; top: -40%; right: -20%; width: 180px; height: 180px;
+          border-radius: 50%; background: radial-gradient(circle, rgba(242,204,143,0.25) 0%, transparent 70%);
+        }
+        .fecha { font-family: var(--body); font-size: 15px; color: var(--light); font-weight: 600; letter-spacing: 0.3px; margin-bottom: 4px; }
+        .saludo-h { font-family: var(--head); font-size: 30px; color: var(--text); line-height: 1.2; }
+        .saludo-msg {
+          font-family: var(--body); font-size: 17px; color: var(--muted); line-height: 1.6;
+          margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(44,47,62,0.06);
+          font-style: italic;
+        }
+
+        /* ── Sound Toggle ── */
+        .sound-toggle {
+          position: absolute; top: 16px; right: 16px; z-index: 2;
+          background: rgba(44,47,62,0.05); border: none; border-radius: 12px;
+          width: 48px; height: 48px; display: flex; align-items: center; justify-content: center;
+          font-size: 22px; cursor: pointer; transition: background 0.2s;
+        }
+        .sound-toggle:hover { background: rgba(44,47,62,0.1); }
+
+        /* ── Progreso ── */
+        .prog {
+          background: var(--card); border-radius: var(--radius); padding: 22px 24px; margin-bottom: 16px;
+          box-shadow: var(--shadow);
+        }
+        .prog-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+        .prog-lbl { font-family: var(--body); font-size: 14px; font-weight: 700; color: var(--light); text-transform: uppercase; letter-spacing: 1.2px; }
+        .prog-num { font-family: var(--head); font-size: 22px; color: var(--green); }
+        .prog-bg { width: 100%; height: 12px; background: #EDE7DC; border-radius: 100px; overflow: hidden; }
+        .prog-fill {
+          height: 100%; border-radius: 100px; transition: width 0.8s cubic-bezier(0.4,0,0.2,1);
+          background: linear-gradient(90deg, var(--green), #78C49A);
+        }
+        .prog-txt { font-family: var(--body); font-size: 15px; color: var(--muted); margin-top: 12px; font-weight: 500; text-align: center; }
+
+        /* ── Ánimo ── */
+        .mood {
+          background: var(--card); border-radius: var(--radius); padding: 24px; margin-bottom: 16px;
+          box-shadow: var(--shadow);
+        }
+        .mood-h { font-family: var(--head); font-size: 22px; color: var(--text); margin-bottom: 18px; }
+        .mood-grid { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+        .mood-btn {
+          width: 88px; height: 88px; border-radius: 20px;
+          border: 3px solid rgba(44,47,62,0.07); background: #FAF7F2;
+          cursor: pointer; transition: all 0.25s; display: flex; flex-direction: column;
+          align-items: center; justify-content: center; gap: 4px;
+        }
+        .mood-btn:hover { border-color: rgba(44,47,62,0.15); transform: translateY(-2px); }
+        .mood-btn.sel { border-color: var(--green); background: rgba(90,158,122,0.08); transform: translateY(-2px); animation: pop 0.3s ease; }
+        .mood-e { font-size: 36px; line-height: 1; }
+        .mood-lb { font-family: var(--body); font-size: 13px; font-weight: 700; color: var(--muted); }
+        .mood-resp {
+          font-family: var(--body); font-size: 17px; color: var(--green); font-weight: 600;
+          text-align: center; margin-top: 18px; animation: fu 0.4s ease forwards; line-height: 1.5;
+        }
+
+        /* ── Tabs ── */
+        .tabs {
+          display: flex; gap: 4px; background: rgba(44,47,62,0.05);
+          border-radius: 16px; padding: 5px; margin-bottom: 16px;
+        }
+        .tab-b {
+          flex: 1; padding: 14px 0; border: none; background: transparent;
+          font-family: var(--body); font-size: 16px; font-weight: 700;
+          color: var(--light); cursor: pointer; border-radius: 12px; transition: all 0.3s;
+        }
+        .tab-b.act { background: var(--card); color: var(--text); box-shadow: 0 2px 8px rgba(44,47,62,0.08); }
+
+        /* ── Reminder Cards ── */
+        .rc {
+          background: var(--card); border-radius: 18px; padding: 18px 20px; margin-bottom: 12px;
+          display: flex; align-items: center; gap: 16px;
+          box-shadow: 0 1px 10px rgba(44,47,62,0.05); transition: all 0.25s; cursor: pointer;
+          border-left: 5px solid transparent;
+        }
+        .rc:hover { box-shadow: 0 4px 20px rgba(44,47,62,0.1); }
+        .rc:active { transform: scale(0.99); }
+        .rc.done { opacity: 0.5; background: #F5F2ED; }
+        .rc.done .rc-txt { text-decoration: line-through; color: var(--light); }
+
+        .rc-chk {
+          width: 48px; height: 48px; border-radius: 50%; border: 3px solid;
+          display: flex; align-items: center; justify-content: center;
+          flex-shrink: 0; transition: all 0.3s; font-size: 22px; font-weight: 700;
+          background: transparent;
+        }
+        .rc-chk.on { color: white !important; animation: check-pop 0.3s ease; }
+
+        .rc-body { flex: 1; min-width: 0; }
+        .rc-txt { font-family: var(--body); font-size: 18px; font-weight: 600; color: var(--text); line-height: 1.35; margin-bottom: 4px; }
+        .rc-time { font-family: var(--body); font-size: 14px; color: var(--light); font-weight: 600; display: flex; align-items: center; gap: 8px; }
+        .rc-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+        .rc-del {
+          background: rgba(212,93,63,0.08); border: none; color: var(--red);
+          width: 48px; height: 48px; border-radius: 14px; font-size: 24px; font-weight: 700;
+          cursor: pointer; display: flex; align-items: center; justify-content: center;
+          flex-shrink: 0; transition: all 0.2s;
+        }
+        .rc-del:hover { background: rgba(212,93,63,0.15); }
+
+        /* ── Delete Confirm ── */
+        .del-confirm {
+          background: #FFF5F2; border: 2px solid rgba(212,93,63,0.2); border-radius: 18px;
+          padding: 20px; margin-bottom: 12px; text-align: center;
+        }
+        .del-msg { font-family: var(--body); font-size: 17px; color: var(--text); font-weight: 600; margin-bottom: 16px; line-height: 1.4; }
+        .del-btns { display: flex; gap: 12px; }
+        .del-yes {
+          flex: 1; padding: 14px; border: none; border-radius: 14px;
+          background: var(--red); color: white; font-family: var(--body);
+          font-size: 16px; font-weight: 700; cursor: pointer;
+        }
+        .del-no {
+          flex: 1; padding: 14px; border: 2px solid rgba(44,47,62,0.1); border-radius: 14px;
+          background: white; color: var(--text); font-family: var(--body);
+          font-size: 16px; font-weight: 700; cursor: pointer;
+        }
+
+        /* ── Form ── */
+        .aform {
+          background: var(--card); border-radius: var(--radius); padding: 28px 24px; margin-bottom: 16px;
+          box-shadow: 0 4px 28px rgba(44,47,62,0.1); animation: fu 0.3s ease;
+        }
+        .flbl { font-family: var(--body); font-size: 14px; font-weight: 800; color: var(--light); text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 10px; display: block; }
+        .finp {
+          width: 100%; padding: 16px 18px; border: 2px solid rgba(44,47,62,0.1);
+          border-radius: 14px; font-family: var(--body); font-size: 18px;
+          color: var(--text); background: #FAF8F4; outline: none; transition: border-color 0.3s; margin-bottom: 20px;
+        }
+        .finp:focus { border-color: var(--green); }
+        .fsel {
+          width: 100%; padding: 16px 18px; border: 2px solid rgba(44,47,62,0.1);
+          border-radius: 14px; font-family: var(--body); font-size: 18px;
+          color: var(--text); background: #FAF8F4; outline: none; margin-bottom: 20px;
+          cursor: pointer; appearance: none; -webkit-appearance: none;
+          background-image: url("data:image/svg+xml,%3Csvg width='14' height='9' viewBox='0 0 14 9' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L7 7L13 1' stroke='%239B9DAB' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
+          background-repeat: no-repeat; background-position: right 18px center;
+        }
+        .cpills { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px; }
+        .cpill {
+          padding: 12px 18px; border-radius: 100px; border: 2px solid rgba(44,47,62,0.08);
+          background: transparent; font-family: var(--body); font-size: 15px;
+          font-weight: 700; color: var(--muted); cursor: pointer; transition: all 0.2s;
+        }
+        .cpill.sel { color: white; border-color: transparent; }
+        .fbtns { display: flex; gap: 12px; }
+        .btn-go {
+          flex: 1; padding: 16px; border: none; border-radius: 14px;
+          background: linear-gradient(135deg, var(--green), #489E6A);
+          color: white; font-family: var(--body); font-size: 17px; font-weight: 700;
+          cursor: pointer; transition: all 0.3s;
+        }
+        .btn-go:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(90,158,122,0.3); }
+        .btn-cancel {
+          padding: 16px 24px; border: 2px solid rgba(44,47,62,0.1); border-radius: 14px;
+          background: transparent; color: var(--muted); font-family: var(--body);
+          font-size: 17px; font-weight: 700; cursor: pointer;
+        }
+
+        /* ── FABs ── */
+        .fab-add {
+          position: fixed; bottom: 24px; right: calc(50% - 244px);
+          width: 64px; height: 64px; border-radius: 50%; border: none;
+          background: linear-gradient(135deg, var(--red), #C04A30);
+          color: white; font-size: 32px; font-weight: 300; cursor: pointer;
+          box-shadow: 0 6px 24px rgba(212,93,63,0.4);
+          display: flex; align-items: center; justify-content: center; transition: all 0.3s; z-index: 10;
+        }
+        .fab-add:hover { transform: scale(1.08); }
+
+        .fab-ci {
+          position: fixed; bottom: 24px; left: calc(50% - 244px);
+          height: 64px; padding: 0 28px; border-radius: 100px; border: none;
+          background: linear-gradient(135deg, var(--purple), #6A5C9E);
+          color: white; font-family: var(--body); font-size: 17px; font-weight: 700;
+          cursor: pointer; box-shadow: 0 6px 24px rgba(123,109,175,0.35);
+          display: flex; align-items: center; gap: 10px; transition: all 0.3s; z-index: 10;
+        }
+        .fab-ci:hover { transform: scale(1.04); }
+
+        /* ── Check-in Overlay ── */
+        .overlay {
+          position: fixed; inset: 0; background: rgba(44,47,62,0.35);
+          backdrop-filter: blur(8px); display: flex; align-items: flex-end;
+          justify-content: center; z-index: 100; animation: fadeIn 0.3s ease;
+        }
+        .sheet {
+          background: var(--card); border-radius: 28px 28px 0 0; padding: 32px 24px 40px;
+          width: 100%; max-width: 520px; max-height: 88vh; overflow-y: auto;
+          animation: slideUp 0.4s cubic-bezier(0.16,1,0.3,1);
+        }
+        .handle { width: 48px; height: 5px; background: rgba(44,47,62,0.12); border-radius: 100px; margin: 0 auto 24px; }
+        .ci-t { font-family: var(--head); font-size: 26px; color: var(--text); margin-bottom: 8px; }
+        .ci-sub { font-family: var(--body); font-size: 17px; color: var(--muted); margin-bottom: 28px; line-height: 1.5; }
+        .ci-ta {
+          width: 100%; padding: 18px; border: 2px solid rgba(44,47,62,0.1);
+          border-radius: 16px; font-family: var(--body); font-size: 18px;
+          color: var(--text); background: #FAF8F4; outline: none; resize: none;
+          min-height: 120px; line-height: 1.6; margin-bottom: 24px;
+        }
+        .ci-ta:focus { border-color: var(--purple); }
+        .ci-ok { text-align: center; padding: 48px 0; }
+        .ci-ok-e { font-size: 56px; margin-bottom: 20px; }
+        .ci-ok-t { font-family: var(--head); font-size: 22px; color: var(--text); }
+        .ci-ok-sub { font-family: var(--body); font-size: 17px; color: var(--muted); margin-top: 10px; }
+
+        .empty { text-align: center; padding: 48px 20px; }
+        .empty-e { font-size: 48px; margin-bottom: 16px; }
+        .empty-t { font-family: var(--body); font-size: 18px; color: var(--muted); line-height: 1.6; font-weight: 500; }
+
+        @media (max-width: 560px) {
+          .fab-add { right: 20px; }
+          .fab-ci { left: 20px; }
+          .mood-btn { width: 60px; height: 76px; border-radius: 16px; }
+          .mood-e { font-size: 30px; }
+          .mood-lb { font-size: 12px; }
+        }
+      `}</style>
+
+      <div className="wrap">
+        {/* Saludo */}
+        <div className="saludo fi" style={{ position: "relative" }}>
+          <button
+            className="sound-toggle"
+            onClick={() => setSound(!sound)}
+            aria-label={sound ? "Desactivar sonido" : "Activar sonido"}
+            title={sound ? "Sonido activado" : "Sonido desactivado"}
+          >
+            {sound ? "🔊" : "🔇"}
+          </button>
+          <p className="fecha">{formatFecha(new Date())}</p>
+          <h1 className="saludo-h">{getSaludo()} ☀️</h1>
+          <p className="saludo-msg">{mensaje}</p>
+        </div>
+
+        {/* Progreso */}
+        <div className="prog fi d1">
+          <div className="prog-row">
+            <span className="prog-lbl">Progreso de Hoy</span>
+            <span className="prog-num">{done}/{total}</span>
+          </div>
+          <div className="prog-bg">
+            <div className="prog-fill" style={{ width: `${pct}%` }} />
+          </div>
+          {done > 0 && done < total && (
+            <p className="prog-txt">
+              {done === 1 ? "¡Buen comienzo!" : `¡Ya van ${done}! Sigue así.`}
+            </p>
+          )}
+          {done === total && total > 0 && (
+            <p className="prog-txt">🎉 ¡Completaste todo! ¡Tremendo!</p>
+          )}
+        </div>
+
+        {/* Ánimo */}
+        <div className="mood fi d2">
+          <h2 className="mood-h">¿Cómo te sientes? 💛</h2>
+          <div className="mood-grid">
+            {MOODS.map((m) => (
+              <button
+                key={m.val}
+                className={`mood-btn ${animo === m.val ? "sel" : ""}`}
+                onClick={() => { setAnimo(m.val); if (sound) playTone("mood"); }}
+                aria-label={`Me siento ${m.label}`}
+              >
+                <span className="mood-e">{m.emoji}</span>
+                <span className="mood-lb">{m.label}</span>
+              </button>
+            ))}
+          </div>
+          {animo && <p className="mood-resp">{MOOD_RESP[animo]}</p>}
+        </div>
+
+        {/* Tabs */}
+        <div className="tabs fi d3">
+          <button className={`tab-b ${tab === "hoy" ? "act" : ""}`} onClick={() => setTab("hoy")}>
+            Pendientes ({pendientes.length})
+          </button>
+          <button className={`tab-b ${tab === "listo" ? "act" : ""}`} onClick={() => setTab("listo")}>
+            Hechos ({completados.length})
+          </button>
+        </div>
+
+        {/* Form */}
+        {showForm && (
+          <div className="aform">
+            <label className="flbl">¿Qué te recuerdo?</label>
+            <input
+              className="finp" type="text"
+              placeholder="Ej: Tomar medicina de la noche..."
+              value={nuevo.text}
+              onChange={(e) => setNuevo({ ...nuevo, text: e.target.value })}
+              onKeyDown={(e) => e.key === "Enter" && agregar()}
+              autoFocus
+            />
+            <label className="flbl">¿A qué hora?</label>
+            <select className="fsel" value={nuevo.time} onChange={(e) => setNuevo({ ...nuevo, time: e.target.value })}>
+              {HORAS.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+            <label className="flbl">Categoría</label>
+            <div className="cpills">
+              {CATS.map((c) => (
+                <button
+                  key={c.id}
+                  className={`cpill ${nuevo.cat === c.id ? "sel" : ""}`}
+                  style={nuevo.cat === c.id ? { background: c.color, borderColor: c.color } : {}}
+                  onClick={() => setNuevo({ ...nuevo, cat: c.id })}
+                >
+                  {c.icon} {c.label}
+                </button>
+              ))}
+            </div>
+            <div className="fbtns">
+              <button className="btn-cancel" onClick={() => setShowForm(false)}>Cancelar</button>
+              <button className="btn-go" onClick={agregar}>Agregar ✓</button>
+            </div>
+          </div>
+        )}
+
+        {/* List */}
+        <div className="fi d4">
+          {tab === "hoy" && (
+            <>
+              {pendientes.length === 0 ? (
+                <div className="empty">
+                  <div className="empty-e">🎉</div>
+                  <div className="empty-t">¡Todo listo por hoy!<br />Te luciste. Descansa tranquilo/a.</div>
+                </div>
+              ) : (
+                pendientes.map((r) => (
+                  <div key={r.id}>
+                    {confirmDel === r.id ? (
+                      <div className="del-confirm">
+                        <p className="del-msg">¿Seguro que quieres borrar<br />"{r.text}"?</p>
+                        <div className="del-btns">
+                          <button className="del-no" onClick={() => setConfirmDel(null)}>No, dejar</button>
+                          <button className="del-yes" onClick={() => borrar(r.id)}>Sí, borrar</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="rc" style={{ borderLeftColor: cc(r.cat) }} onClick={() => toggle(r.id)}>
+                        <div className="rc-chk" style={{ borderColor: cc(r.cat), color: cc(r.cat) }} />
+                        <div className="rc-body">
+                          <div className="rc-txt">{r.text}</div>
+                          <div className="rc-time">
+                            <span className="rc-dot" style={{ background: cc(r.cat) }} />
+                            {r.time}
+                          </div>
+                        </div>
+                        <button
+                          className="rc-del"
+                          onClick={(e) => { e.stopPropagation(); setConfirmDel(r.id); }}
+                          aria-label={`Borrar: ${r.text}`}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </>
+          )}
+
+          {tab === "listo" && (
+            <>
+              {completados.length === 0 ? (
+                <div className="empty">
+                  <div className="empty-e">⏳</div>
+                  <div className="empty-t">Nada completado aún.<br />Toca un recordatorio para marcarlo.</div>
+                </div>
+              ) : (
+                completados.map((r) => (
+                  <div key={r.id} className="rc done" style={{ borderLeftColor: cc(r.cat) }} onClick={() => toggle(r.id)}>
+                    <div className="rc-chk on" style={{ borderColor: cc(r.cat), background: cc(r.cat) }}>✓</div>
+                    <div className="rc-body">
+                      <div className="rc-txt">{r.text}</div>
+                      <div className="rc-time">{r.time}</div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </>
+          )}
+        </div>
+
+        {/* FABs */}
+        <button className="fab-ci" onClick={() => { setShowCI(true); setCIListo(false); }}>
+          💜 ¿Cómo vas?
+        </button>
+        <button className="fab-add" onClick={() => setShowForm(!showForm)} aria-label={showForm ? "Cerrar formulario" : "Agregar recordatorio"}>
+          {showForm ? "✕" : "+"}
+        </button>
+
+        {/* Check-in */}
+        {showCI && (
+          <div className="overlay" onClick={(e) => e.target === e.currentTarget && setShowCI(false)}>
+            <div className="sheet">
+              <div className="handle" />
+              {ciListo ? (
+                <div className="ci-ok">
+                  <div className="ci-ok-e">💜</div>
+                  <div className="ci-ok-t">Gracias por registrarte.</div>
+                  <p className="ci-ok-sub">Estás haciendo algo hermoso por ti.</p>
+                </div>
+              ) : (
+                <>
+                  <h2 className="ci-t">Tu Momento 🌿</h2>
+                  <p className="ci-sub">
+                    Tómate un momento para ti. ¿Cómo va tu día? Sin presión — este espacio es tuyo.
+                  </p>
+                  <label className="flbl">¿Cómo te sientes ahora?</label>
+                  <div className="mood-grid" style={{ marginBottom: 24 }}>
+                    {MOODS.map((m) => (
+                      <button
+                        key={m.val}
+                        className={`mood-btn ${animo === m.val ? "sel" : ""}`}
+                        onClick={() => { setAnimo(m.val); if (sound) playTone("mood"); }}
+                        style={{ height: 80 }}
+                      >
+                        <span className="mood-e">{m.emoji}</span>
+                        <span className="mood-lb">{m.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <label className="flbl">¿Algo en tu mente? (opcional)</label>
+                  <textarea className="ci-ta" placeholder="Me siento..." value={nota} onChange={(e) => setNota(e.target.value)} />
+                  <button className="btn-go" style={{ width: "100%", padding: 18, fontSize: 18 }} onClick={enviarCI}>
+                    Enviar Check-in 💛
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
